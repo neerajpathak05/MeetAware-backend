@@ -1,6 +1,7 @@
 const express = require("express");
 const { google } = require("googleapis");
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 
 const User = require("../models/User");
 const Meeting = require("../models/Meeting");
@@ -69,7 +70,186 @@ async function getAllPages(
 
 
 // ======================================================
-// Analyze meeting
+// GET SAVED MEETING BY ID
+// ======================================================
+
+router.get(
+  "/:meetingId",
+  async (req, res) => {
+    try {
+      // -----------------------------------------
+      // 1. Check JWT
+      // -----------------------------------------
+
+      const authHeader =
+        req.headers.authorization;
+
+      if (
+        !authHeader ||
+        !authHeader.startsWith("Bearer ")
+      ) {
+        return res.status(401).json({
+          message:
+            "Please login to MeetAware first",
+        });
+      }
+
+      const token =
+        authHeader.split(" ")[1];
+
+      const decoded =
+        jwt.verify(
+          token,
+          process.env.JWT_SECRET
+        );
+
+      // -----------------------------------------
+      // 2. Validate meeting ID
+      // -----------------------------------------
+
+      const { meetingId } =
+        req.params;
+
+      if (
+        !mongoose.Types.ObjectId.isValid(
+          meetingId
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            "Invalid meeting ID.",
+        });
+      }
+
+      // -----------------------------------------
+      // 3. Find user
+      // -----------------------------------------
+
+      const user =
+        await User.findById(
+          decoded.userId
+        );
+
+      if (!user) {
+        return res.status(404).json({
+          message:
+            "MeetAware user not found",
+        });
+      }
+
+      // -----------------------------------------
+      // 4. Find meeting belonging to user
+      // -----------------------------------------
+
+      const savedMeeting =
+        await Meeting.findOne({
+          _id: meetingId,
+          userId: user._id,
+        });
+
+      if (!savedMeeting) {
+        return res.status(404).json({
+          message:
+            "Saved meeting not found.",
+        });
+      }
+
+      // -----------------------------------------
+      // 5. Return saved meeting
+      // -----------------------------------------
+
+      console.log(
+        "Restoring saved meeting:",
+        savedMeeting._id
+      );
+
+      console.log(
+        "Participants:",
+        savedMeeting.participants?.length || 0
+      );
+
+      console.log(
+        "Transcript entries:",
+        savedMeeting.transcript?.length || 0
+      );
+
+      return res.status(200).json({
+        message:
+          "Meeting restored successfully",
+
+        meeting: {
+          id:
+            savedMeeting._id,
+
+          meetingCode:
+            savedMeeting.meetingCode,
+
+          conferenceName:
+            savedMeeting.conferenceName,
+
+          meetingLink:
+            savedMeeting.meetingLink,
+
+          startTime:
+            savedMeeting.startTime,
+
+          endTime:
+            savedMeeting.endTime,
+
+          aiAnalysis:
+            savedMeeting.aiAnalysis || null,
+        },
+
+        participants:
+          savedMeeting.participants || [],
+
+        transcript:
+          savedMeeting.transcript || [],
+
+        statistics:
+          savedMeeting.statistics || {},
+      });
+
+    } catch (error) {
+      console.error(
+        "================================"
+      );
+
+      console.error(
+        "RESTORE MEETING ERROR"
+      );
+
+      console.error(
+        error.message || error
+      );
+
+      console.error(
+        "================================"
+      );
+
+      if (
+        error.name ===
+        "JsonWebTokenError"
+      ) {
+        return res.status(401).json({
+          message:
+            "Invalid or expired session.",
+        });
+      }
+
+      return res.status(500).json({
+        message:
+          "Unable to restore meeting.",
+        error:
+          error.message,
+      });
+    }
+  }
+);
+
+
+// ======================================================
+// ANALYZE / FETCH GOOGLE MEET
 // ======================================================
 
 router.post(
@@ -526,9 +706,9 @@ router.post(
       );
 
 
-      // ======================================================
+      // =====================================================
       // DEBUG: Check transcript participant IDs
-      // ======================================================
+      // =====================================================
 
       console.log(
         "================================"
@@ -599,8 +779,7 @@ router.post(
 
 
       // =====================================================
-      // 17. IMPORTANT:
-      // Preserve existing Gemini transcript
+      // 17. Preserve existing Gemini transcript
       // =====================================================
 
       let finalTranscript = [];
@@ -609,9 +788,6 @@ router.post(
       if (
         formattedTranscript.length > 0
       ) {
-
-        // Google Meet has a transcript.
-        // Use it.
 
         finalTranscript =
           formattedTranscript;
@@ -624,10 +800,6 @@ router.post(
         existingMeeting?.transcript &&
         existingMeeting.transcript.length > 0
       ) {
-
-        // Google Meet has no transcript,
-        // but MeetAware already has a transcript
-        // generated by Gemini.
 
         finalTranscript =
           existingMeeting.transcript;
@@ -643,8 +815,6 @@ router.post(
         );
 
       } else {
-
-        // No transcript anywhere.
 
         finalTranscript = [];
 
@@ -772,11 +942,9 @@ router.post(
           participantCount:
             formattedParticipants.length,
 
-          // Google transcript count
           transcriptCount:
             transcripts.length,
 
-          // Actual transcript entries
           transcriptEntryCount:
             finalTranscript.length,
 
