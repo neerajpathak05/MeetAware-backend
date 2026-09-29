@@ -14,6 +14,123 @@ const ai = new GoogleGenAI({
 
 
 // ======================================================
+// GEMINI MODEL FALLBACK
+// ======================================================
+
+const GEMINI_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+];
+
+
+// ======================================================
+// GENERATE AI RESPONSE WITH FALLBACK
+// ======================================================
+
+const generateWithFallback = async (prompt) => {
+
+  let lastError = null;
+
+  for (const model of GEMINI_MODELS) {
+
+    try {
+
+      console.log(
+        `Trying Gemini model: ${model}`
+      );
+
+      const response =
+        await ai.models.generateContent({
+
+          model,
+
+          contents: [
+            {
+              role: "user",
+
+              parts: [
+                {
+                  text: prompt,
+                },
+              ],
+            },
+          ],
+
+          config: {
+            responseMimeType: "application/json",
+          },
+
+        });
+
+
+      console.log(
+        `Gemini model succeeded: ${model}`
+      );
+
+
+      return {
+        response,
+        model,
+      };
+
+
+    } catch (error) {
+
+      lastError = error;
+
+      console.error(
+        `Gemini model failed: ${model}`
+      );
+
+      console.error(
+        error.message
+      );
+
+
+      const errorText =
+        JSON.stringify(error);
+
+
+      const retryable =
+        errorText.includes("404") ||
+        errorText.includes("NOT_FOUND") ||
+        errorText.includes("400") ||
+        errorText.includes("INVALID_ARGUMENT") ||
+        errorText.includes("429") ||
+        errorText.includes("RESOURCE_EXHAUSTED") ||
+        errorText.includes("500") ||
+        errorText.includes("503") ||
+        errorText.includes("UNAVAILABLE");
+
+
+      if (!retryable) {
+
+        throw error;
+
+      }
+
+
+      console.log(
+        `Trying next Gemini model...`
+      );
+
+    }
+
+  }
+
+
+  throw new Error(
+    `All Gemini models are currently unavailable. ${
+      lastError?.message || ""
+    }`
+  );
+
+};
+
+
+// ======================================================
 // AI ANALYSIS
 // POST /api/meetings/:meetingId/analyze
 // ======================================================
@@ -31,14 +148,19 @@ router.post(
       const authHeader =
         req.headers.authorization;
 
+
       if (
         !authHeader ||
         !authHeader.startsWith("Bearer ")
       ) {
+
         return res.status(401).json({
+
           message:
             "Please login to MeetAware first.",
+
         });
+
       }
 
 
@@ -64,10 +186,14 @@ router.post(
 
 
       if (!user) {
+
         return res.status(404).json({
+
           message:
             "MeetAware user not found.",
+
         });
+
       }
 
 
@@ -77,16 +203,25 @@ router.post(
 
       const meeting =
         await Meeting.findOne({
-          _id: req.params.meetingId,
-          userId: user._id,
+
+          _id:
+            req.params.meetingId,
+
+          userId:
+            user._id,
+
         });
 
 
       if (!meeting) {
+
         return res.status(404).json({
+
           message:
             "Meeting not found.",
+
         });
+
       }
 
 
@@ -100,8 +235,10 @@ router.post(
       ) {
 
         return res.status(400).json({
+
           message:
             "No transcript available. Record and transcribe the meeting first.",
+
         });
 
       }
@@ -119,9 +256,11 @@ router.post(
               entry.speaker ||
               "Unknown Speaker";
 
+
             const text =
               entry.text ||
               "";
+
 
             return `${speaker}: ${text}`;
 
@@ -156,7 +295,7 @@ router.post(
       // 6. Gemini prompt
       // -----------------------------------------
 
-  const prompt = `
+      const prompt = `
 You are an intelligent meeting analysis assistant.
 
 The current MeetAware user is:
@@ -187,7 +326,7 @@ IMPORTANT RULES:
    - A deadline that the user is responsible for.
 10. Do NOT create a personal alert simply because the user participated in the meeting.
 11. If there is no information relevant to the user, return an empty personalAlerts array.
-12. Return valid JSON only.
+12. Return only valid JSON.
 13. Do not use markdown.
 14. Keep the summary concise but informative.
 
@@ -237,7 +376,7 @@ ${transcriptText}
 
 
       // -----------------------------------------
-      // 7. Call Gemini
+      // 7. Call Gemini with model fallback
       // -----------------------------------------
 
       console.log(
@@ -245,25 +384,19 @@ ${transcriptText}
       );
 
 
-      const response =
-        await ai.models.generateContent({
+      const {
+        response,
+        model,
+      } =
+        await generateWithFallback(
+          prompt
+        );
 
-          model:
-            "gemini-3.7-flash",
 
-          contents: [
-            {
-              role: "user",
-
-              parts: [
-                {
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-
-        });
+      console.log(
+        "Gemini analysis model used:",
+        model
+      );
 
 
       // -----------------------------------------
@@ -274,8 +407,10 @@ ${transcriptText}
 
 
       if (response.text) {
+
         resultText =
           response.text.trim();
+
       }
 
 
@@ -319,7 +454,9 @@ ${transcriptText}
       try {
 
         analysis =
-          JSON.parse(resultText);
+          JSON.parse(
+            resultText
+          );
 
       } catch (parseError) {
 
@@ -339,6 +476,7 @@ ${transcriptText}
           resultText
         );
 
+
         throw new Error(
           "Gemini returned invalid JSON."
         );
@@ -353,9 +491,11 @@ ${transcriptText}
       const safeAnalysis = {
 
         summary:
-          typeof analysis.summary === "string"
+          typeof analysis.summary ===
+          "string"
             ? analysis.summary
             : "",
+
 
         speakerDiscussions:
           Array.isArray(
@@ -364,12 +504,14 @@ ${transcriptText}
             ? analysis.speakerDiscussions
             : [],
 
+
         decisions:
           Array.isArray(
             analysis.decisions
           )
             ? analysis.decisions
             : [],
+
 
         actionItems:
           Array.isArray(
@@ -378,12 +520,14 @@ ${transcriptText}
             ? analysis.actionItems
             : [],
 
+
         deadlines:
           Array.isArray(
             analysis.deadlines
           )
             ? analysis.deadlines
             : [],
+
 
         personalAlerts:
           Array.isArray(
@@ -412,6 +556,11 @@ ${transcriptText}
 
       console.log(
         "AI ANALYSIS SAVED"
+      );
+
+      console.log(
+        "Model:",
+        model
       );
 
       console.log(
@@ -466,6 +615,9 @@ ${transcriptText}
         meetingId:
           meeting._id,
 
+        modelUsed:
+          model,
+
         aiAnalysis:
           meeting.aiAnalysis,
 
@@ -490,6 +642,58 @@ ${transcriptText}
         "================================"
       );
 
+
+      const errorText =
+        JSON.stringify(error);
+
+
+      // -----------------------------------------
+      // Gemini temporary unavailable
+      // -----------------------------------------
+
+      if (
+        errorText.includes("503") ||
+        errorText.includes("UNAVAILABLE")
+      ) {
+
+        return res.status(503).json({
+
+          message:
+            "AI analysis is temporarily unavailable. Your meeting transcript is safe. Please try again shortly.",
+
+          error:
+            error.message,
+
+        });
+
+      }
+
+
+      // -----------------------------------------
+      // Gemini rate limit
+      // -----------------------------------------
+
+      if (
+        errorText.includes("429") ||
+        errorText.includes("RESOURCE_EXHAUSTED")
+      ) {
+
+        return res.status(429).json({
+
+          message:
+            "AI analysis is temporarily busy. Please try again shortly.",
+
+          error:
+            error.message,
+
+        });
+
+      }
+
+
+      // -----------------------------------------
+      // General error
+      // -----------------------------------------
 
       return res.status(500).json({
 
