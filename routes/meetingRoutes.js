@@ -75,7 +75,10 @@ async function getAllPages(
 
 router.get(
   "/:meetingId",
-  async (req, res) => {
+  async (req, res,next) => {
+    if (req.params.meetingId === "history") {
+  return next();
+}
     try {
       // -----------------------------------------
       // 1. Check JWT
