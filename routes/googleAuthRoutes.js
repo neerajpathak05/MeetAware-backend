@@ -8,11 +8,16 @@ const router = express.Router();
 const MEET_SCOPE =
   "https://www.googleapis.com/auth/meetings.space.readonly";
 
+// Production fallback.
+// Render's GOOGLE_REDIRECT_URI will be used if it exists.
+const GOOGLE_REDIRECT_URI =
+  "https://meetaware-backend.onrender.com/api/google/callback";
+
 const createOAuthClient = () => {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
+    GOOGLE_REDIRECT_URI
   );
 };
 
@@ -58,10 +63,8 @@ router.get("/auth", (req, res) => {
       });
     }
 
-    /*
-      The state token connects the Google OAuth callback
-      back to the currently authenticated MeetAware user.
-    */
+    // State connects Google OAuth callback
+    // with the currently logged-in MeetAware user.
     const state = jwt.sign(
       {
         userId: decoded.userId,
@@ -74,12 +77,18 @@ router.get("/auth", (req, res) => {
 
     const oauth2Client = createOAuthClient();
 
+    // Generate Google OAuth authorization URL
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: "offline",
       prompt: "consent",
       scope: [MEET_SCOPE],
       state,
+
+      // Explicitly include redirect URI
+      redirect_uri: GOOGLE_REDIRECT_URI,
     });
+
+    console.log("Google OAuth redirect URI:", GOOGLE_REDIRECT_URI);
 
     return res.status(200).json({
       authUrl,
@@ -132,7 +141,11 @@ router.get("/callback", async (req, res) => {
 
     const oauth2Client = createOAuthClient();
 
-    const { tokens } = await oauth2Client.getToken(code);
+    // Exchange authorization code for Google tokens
+    const { tokens } = await oauth2Client.getToken({
+      code,
+      redirect_uri: GOOGLE_REDIRECT_URI,
+    });
 
     if (!tokens.access_token) {
       return res.status(400).send(
@@ -144,8 +157,7 @@ router.get("/callback", async (req, res) => {
 
     /*
       Google may not return a refresh token every time.
-      Therefore, keep the existing refresh token if one
-      is not returned.
+      Keep the existing refresh token if one is not returned.
     */
     if (tokens.refresh_token) {
       user.googleRefreshToken = tokens.refresh_token;
@@ -161,64 +173,16 @@ router.get("/callback", async (req, res) => {
     );
 
     /*
-      For local development, this can remain the backend
-      success page.
-
-      During deployment, set:
-      FRONTEND_URL=https://your-frontend-domain.com
+      After successful Google authentication,
+      redirect the user back to the deployed frontend.
     */
     const frontendUrl =
-      process.env.FRONTEND_URL || null;
+      process.env.FRONTEND_URL ||
+      "https://meet-aware-frontend.vercel.app";
 
-    if (frontendUrl) {
-      return res.redirect(
-        `${frontendUrl}/dashboard?google=connected`
-      );
-    }
-
-    return res.send(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="UTF-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>MeetAware</title>
-        </head>
-
-        <body
-          style="
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: #f9fafb;
-            color: #111827;
-          "
-        >
-          <div
-            style="
-              max-width: 500px;
-              margin: 100px auto;
-              padding: 40px;
-              text-align: center;
-              background: white;
-              border: 1px solid #e5e7eb;
-              border-radius: 16px;
-            "
-          >
-            <h1 style="margin-bottom: 12px;">
-              Google Connected Successfully
-            </h1>
-
-            <p style="color: #6b7280; line-height: 1.6;">
-              Your Google account is now connected to MeetAware.
-            </p>
-
-            <p style="color: #6b7280;">
-              You can close this window and return to MeetAware.
-            </p>
-          </div>
-        </body>
-      </html>
-    `);
+    return res.redirect(
+      `${frontendUrl}/dashboard?google=connected`
+    );
   } catch (error) {
     console.error("Google callback error:", error);
 
